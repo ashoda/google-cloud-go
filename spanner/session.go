@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -446,6 +447,8 @@ func (p *sessionPool) shouldPrepareWrite() bool {
 
 func (p *sessionPool) createSession(ctx context.Context) (*session, error) {
 	tracePrintf(ctx, nil, "Creating a new session")
+	start := time.Now()
+	debugf("spanner: creating a new session\n")
 	doneCreate := func(done bool) {
 		p.mu.Lock()
 		if !done {
@@ -483,6 +486,7 @@ func (p *sessionPool) createSession(ctx context.Context) (*session, error) {
 		return nil, err
 	}
 	doneCreate(true)
+	debugf("spanner: created a new session in %fs\n", time.Since(start).Seconds())
 	return s, nil
 }
 
@@ -515,6 +519,8 @@ func (p *sessionPool) take(ctx context.Context) (*sessionHandle, error) {
 			p.mu.Unlock()
 			return nil, errInvalidSessionPool()
 		}
+
+		debugf("spanner: current pool size: %d\n", p.numOpened)
 		if p.idleList.Len() > 0 {
 			// Idle sessions are available, get one from the top of the idle list.
 			s = p.idleList.Remove(p.idleList.Front()).(*session)
@@ -540,6 +546,7 @@ func (p *sessionPool) take(ctx context.Context) (*sessionHandle, error) {
 		if (p.MaxOpened > 0 && p.numOpened >= p.MaxOpened) || (p.MaxBurst > 0 && p.createReqs >= p.MaxBurst) {
 			mayGetSession := p.mayGetSession
 			p.mu.Unlock()
+			debugf("spanner: waiting for read-only sessions to become available\n")
 			tracePrintf(ctx, nil, "Waiting for read-only session to become available")
 			select {
 			case <-ctx.Done():
@@ -579,6 +586,7 @@ func (p *sessionPool) takeWriteSession(ctx context.Context) (*sessionHandle, err
 			p.mu.Unlock()
 			return nil, errInvalidSessionPool()
 		}
+		debugf("spanner: current pool size: %d\n", p.numOpened)
 		if p.idleWriteList.Len() > 0 {
 			// Idle sessions are available, get one from the top of the idle list.
 			s = p.idleWriteList.Remove(p.idleWriteList.Front()).(*session)
@@ -601,6 +609,7 @@ func (p *sessionPool) takeWriteSession(ctx context.Context) (*sessionHandle, err
 			if (p.MaxOpened > 0 && p.numOpened >= p.MaxOpened) || (p.MaxBurst > 0 && p.createReqs >= p.MaxBurst) {
 				mayGetSession := p.mayGetSession
 				p.mu.Unlock()
+				debugf("spanner: waiting for read-write sessions to become available\n")
 				tracePrintf(ctx, nil, "Waiting for read-write session to become available")
 				select {
 				case <-ctx.Done():
@@ -1077,4 +1086,10 @@ func shouldDropSession(err error) bool {
 		return true
 	}
 	return false
+}
+
+func debugf(format string, values ...interface{}) {
+	if os.Getenv("DISABLE_SPANNER_SESSION_LOGGING") != "true" {
+		log.Printf(format, values...)
+	}
 }
